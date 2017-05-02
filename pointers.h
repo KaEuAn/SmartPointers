@@ -133,6 +133,10 @@ public:
 
 };
 
+
+template<typename T>
+class WeakPtr;
+
 template<typename T>
 class SharedPtr {
     typedef typename std::remove_reference<T>::type type;
@@ -157,6 +161,9 @@ public:
     }
     explicit SharedPtr(SharedPtr&& other) {
         link = new SharedPtrLink<T>(std::move(*(other.link)));
+    }
+    explicit SharedPtr(const WeakPtr<T>& other) {
+        link = new SharedPtrLink<T>(*(other->link));
     }
     ~SharedPtr() {
         delete link;
@@ -193,5 +200,32 @@ public:
     type& operator*() const {
         return *get();
     }
+    friend class WeakPtr<T>;
 };
 
+template<typename T>
+class WeakPtr {
+    SharedPtrLink<T>* link;
+
+    void remove() {
+        if (!this)
+            return;
+        link->remove();
+    }
+
+public:
+    WeakPtr(const SharedPtr<T>& x) {
+        link = new SharedPtrLink<T>(*(x.link));
+    }
+    ~WeakPtr() = default;
+    uint32_t use_count() const {
+        return link->use_count();
+    }
+    bool expired() const {
+        return link->use_count() == 0;
+    }
+    SharedPtr<T>& lock() {
+        SharedPtr<T> newShared(*this);
+        return newShared;
+    }
+};
