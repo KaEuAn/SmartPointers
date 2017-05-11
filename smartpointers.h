@@ -1,6 +1,7 @@
 #include <iostream>
 #include <memory>
 #include <utility>
+#include <type_traits>
 
 template<typename T>
 class UniquePtr {
@@ -13,6 +14,7 @@ class UniquePtr {
         if (!this)
             return;
         delete pointer;
+        pointer = nullptr;
     }
 
 public:
@@ -20,20 +22,23 @@ public:
     explicit UniquePtr(T_pointer&& p) : pointer(std::move(p))  {
         p = nullptr;
     }
+    UniquePtr(UniquePtr& other) = delete;
     explicit UniquePtr(const T_pointer& p) : pointer(p)  {}
-    explicit UniquePtr(UniquePtr&& other) : pointer(std::move(other.pointer)) {
-        other.pointer = nullptr;
+    UniquePtr(UniquePtr&& other) {
+        pointer = other.release();
     }
     ~UniquePtr() {
         remove();
     }
-    const UniquePtr operator= (UniquePtr& other) = delete;
-    const UniquePtr operator= (UniquePtr&& other) {
-        if(this == &other)
+    UniquePtr& operator= (UniquePtr& other) = delete;
+    UniquePtr& operator= (UniquePtr&& other) {
+        if (this == &other)
             return *this;
         reset(other.release());
         return *this;
     }
+
+
     T_pointer operator-> () const {
         return get();
     }
@@ -50,13 +55,15 @@ public:
     }
 
     T_pointer release() {
-        T_pointer answer = pointer;
-        remove();
+        if (!pointer)
+            return nullptr;
+        T_pointer answer = new T(*pointer);
+        pointer = nullptr;
         return answer;
     }
     void reset(T_pointer ptr) {
         std::swap(ptr, pointer);
-        if (ptr != pointer)
+        if (ptr != pointer && ptr)
             delete ptr;
     }
 
@@ -65,33 +72,41 @@ public:
 };
 
 template<typename T>
+class WeakPtr;
+
+
+template<typename T>
 class SharedPtrLink {
     typedef typename std::remove_reference<T>::type type;
     typedef type* T_pointer;
 
     T_pointer pointer;
-    uint32_t* count;
+    size_t* count;
 
 public:
     explicit SharedPtrLink(): pointer(nullptr), count(nullptr) {}
     explicit SharedPtrLink(const T_pointer& p) : pointer(p) {
-        count = new uint32_t(1);
+        count = new size_t(1);
     }
     explicit SharedPtrLink(T_pointer&& p) : pointer(std::move(p)) {
-        count = new uint32_t(1);
+        count = new size_t(1);
         p = nullptr;
     }
-    explicit SharedPtrLink(const SharedPtrLink& other) : pointer(other.pointer), count(other.count) {
+    SharedPtrLink(const SharedPtrLink& other) : pointer(other.pointer), count(other.count) {
         ++*(count);
     }
-    explicit SharedPtrLink(SharedPtrLink&& other) : pointer(std::move(other.pointer)), count(std::move(other.count)) {
+
+    SharedPtrLink(SharedPtrLink&& other) : pointer(std::move(other.pointer)), count(std::move(other.count)) {
         other.pointer = nullptr;
         other.count = nullptr;
     }
+
     ~SharedPtrLink() {
         remove();
     }
     SharedPtrLink operator= (SharedPtrLink&& other) {
+        if (&other == this)
+            return this;
         remove();
         count = other.count;
         other.count = nullptr;
@@ -100,11 +115,25 @@ public:
         return *this;
     }
     SharedPtrLink operator= (const SharedPtrLink& other) {
+        if (&other == this)
+            return this;
         remove();
         count = other.count;
         pointer = other.pointer;
         ++*count;
         return *this;
+    }
+
+    SharedPtrLink operator= (const T_pointer& p) {
+        remove();
+        pointer = new T_pointer(p);
+        count = new size_t(1);
+    }
+
+    SharedPtrLink operator= (T&& other) {
+        remove();
+        pointer = std::move(other);
+        count = new size_t(1);
     }
 
     void swap(SharedPtrLink& other) {
@@ -120,6 +149,8 @@ public:
         if (count == 0) {
             delete count;
             delete pointer;
+            count = nullptr;
+            pointer = nullptr;
         }
     }
 
@@ -127,15 +158,13 @@ public:
         return pointer;
     }
 
-    uint32_t use_count() const {
+    size_t use_count() const {
         return *count;
     }
+    friend class WeakPtr<T>;
 
 };
 
-
-template<typename T>
-class WeakPtr;
 
 template<typename T>
 class SharedPtr {
@@ -148,20 +177,27 @@ class SharedPtr {
         if (!this)
             return;
         link.remove();
+        link = nullptr;
     }
 public:
+    SharedPtr() {
+        link = new SharedPtrLink<T>();
+    }
     explicit SharedPtr(const T_pointer& p) {
         link = new SharedPtrLink<T>(p);
     }
     explicit SharedPtr(T_pointer&& p) {
         link = new SharedPtrLink<T>(std::move(p));
     }
-    explicit SharedPtr(const SharedPtr& other) {
+
+    SharedPtr(const SharedPtr& other) {
         link = new SharedPtrLink<T>(*(other.link));
     }
-    explicit SharedPtr(SharedPtr&& other) {
+
+    SharedPtr(SharedPtr&& other) {
         link = new SharedPtrLink<T>(std::move(*(other.link)));
     }
+
     explicit SharedPtr(const WeakPtr<T>& other) {
         link = new SharedPtrLink<T>(*(other->link));
     }
@@ -169,15 +205,29 @@ public:
         delete link;
     }
     SharedPtr operator= (T&& other) {
+        if (&other == this)
+            return this;
         link.operator=(std::move(other));
         return *this;
     }
     SharedPtr operator= (const T& other) {
+        if (&other == this)
+            return this;
         link.operator=(other);
         return *this;
     }
 
-    const uint32_t use_count() const {
+    SharedPtr operator= (const SharedPtr& other) {
+        link->operator=(other.link);
+        return *this;
+    }
+
+    SharedPtr operator= (const SharedPtr&& other) {
+        link->operator=(std::move(other.link));
+        return *this;
+    }
+
+    size_t use_count() const {
         return link->use_count();
     }
 
@@ -186,9 +236,10 @@ public:
     }
 
     void reset(T_pointer p) {
-        SharedPtr<T> sh(p);
-        swap(sh);
-        sh.remove();
+        SharedPtr(p).swap(*this);
+    }
+    void reset() {
+        SharedPtr().swap(*this);
     }
 
     T_pointer get() const {
@@ -210,22 +261,62 @@ class WeakPtr {
     void remove() {
         if (!this)
             return;
-        link->remove();
+        ++(link->count);
+        delete link;
+        link = nullptr;
     }
 
 public:
+    WeakPtr() : link(nullptr) {}
     WeakPtr(const SharedPtr<T>& x) {
-        link = new SharedPtrLink<T>(*(x.link));
+        link->operator=(x.link);
+        --*(link->count);
     }
-    ~WeakPtr() = default;
-    uint32_t use_count() const {
+    WeakPtr operator= (const SharedPtrLink<T>& x) {
+        remove();
+        link->operator=(x.link);
+        return *this;
+    }
+    WeakPtr(const WeakPtr& other) {
+        link = new SharedPtrLink<T>(*(other.link));
+        --*(link->count);
+    }
+    WeakPtr(WeakPtr&& other) {
+        link = other.link;
+        other.link = nullptr;
+    }
+    WeakPtr& operator= (const WeakPtr& other) {
+        if (&other == this)
+            return this;
+        remove();
+        link = new SharedPtrLink<T>(*(other.link));
+        --(link->count);
+        return *this;
+    }
+    WeakPtr& operator= (WeakPtr&& other) {
+        if (&other == this)
+            return this;
+        remove();
+        link = other.link;
+        other.link = nullptr;
+    }
+    ~WeakPtr() {
+        remove();
+    }
+    size_t use_count() const {
         return link->use_count();
     }
     bool expired() const {
         return link->use_count() == 0;
     }
     SharedPtr<T>& lock() {
-        SharedPtr<T> newShared(*this);
-        return newShared;
+        return SharedPtr<T>(*this);
+    }
+
+    void swap(T& other) {
+        std::swap(link, other.link);
+    }
+    void reset() {
+        WeakPtr().swap(*this);
     }
 };
