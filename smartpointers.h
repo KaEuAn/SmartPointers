@@ -176,10 +176,13 @@ class SharedPtr {
     void remove() {
         if (!this)
             return;
-        link.remove();
+        link->remove();
+        delete link;
         link = nullptr;
     }
 public:
+    template<typename _T>
+    friend class WeakPtr;
     SharedPtr() {
         link = new SharedPtrLink<T>();
     }
@@ -195,11 +198,12 @@ public:
     }
 
     SharedPtr(SharedPtr&& other) {
-        link = new SharedPtrLink<T>(std::move(*(other.link)));
+        link = other.link;
+        other.link = nullptr;
     }
 
     explicit SharedPtr(const WeakPtr<T>& other) {
-        link = new SharedPtrLink<T>(*(other->link));
+        link = new SharedPtrLink<T>(*(other.link));
     }
     ~SharedPtr() {
         delete link;
@@ -218,12 +222,15 @@ public:
     }
 
     SharedPtr operator= (const SharedPtr& other) {
-        link->operator=(other.link);
+        remove();
+        link = new SharedPtrLink<T>(*(other.link));
         return *this;
     }
 
-    SharedPtr operator= (const SharedPtr&& other) {
-        link->operator=(std::move(other.link));
+    SharedPtr operator= (SharedPtr&& other) {
+        remove();
+        link = other.link;
+        other.link = nullptr;
         return *this;
     }
 
@@ -251,7 +258,6 @@ public:
     type& operator*() const {
         return *get();
     }
-    friend class WeakPtr<T>;
 };
 
 template<typename T>
@@ -267,14 +273,18 @@ class WeakPtr {
     }
 
 public:
+    template<typename _T>
+    friend class SharedPtr;
+
     WeakPtr() : link(nullptr) {}
     WeakPtr(const SharedPtr<T>& x) {
-        link->operator=(x.link);
+        link = new SharedPtrLink<T>(*(x.link));
         --*(link->count);
     }
     WeakPtr operator= (const SharedPtrLink<T>& x) {
         remove();
-        link->operator=(x.link);
+        link = new SharedPtrLink<T>(*(x.link));
+        --*(link->count);
         return *this;
     }
     WeakPtr(const WeakPtr& other) {
@@ -295,10 +305,11 @@ public:
     }
     WeakPtr& operator= (WeakPtr&& other) {
         if (&other == this)
-            return this;
+            return *this;
         remove();
         link = other.link;
         other.link = nullptr;
+        return *this;
     }
     ~WeakPtr() {
         remove();
@@ -309,7 +320,7 @@ public:
     bool expired() const {
         return link->use_count() == 0;
     }
-    SharedPtr<T>& lock() {
+    SharedPtr<T> lock() const {
         return SharedPtr<T>(*this);
     }
 
