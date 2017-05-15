@@ -6,6 +6,8 @@
 
 #include "smartpointers.h"
 
+
+
 void test_unique_ptr() {
     {
         for (int i = 0; i < 1'000'000; ++i) {
@@ -163,7 +165,7 @@ void test_weak_ptr() {
     assert(weak.use_count() == 1);
     assert(wp.use_count() == 1);
     auto wwp = std::move(weak);
-    //assert(weak.use_count() == 0);
+    assert(weak.use_count() == 0);
     assert(wwp.use_count() == 1);
 
     auto ssp = wwp.lock();
@@ -181,6 +183,7 @@ void test_weak_ptr() {
 int main() {
     int x;
     std::cin >> x;
+    int y;
     switch (x) {
         case 0:
             test_unique_ptr();
